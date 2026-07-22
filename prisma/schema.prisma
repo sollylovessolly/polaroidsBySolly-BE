@@ -1,0 +1,546 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | CUSTOMERS
+ * |--------------------------------------------------------------------------
+ */
+
+model Customer {
+  id         String  @id @default(cuid())
+  name       String
+  phone      String
+  email      String?
+  isArchived Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+
+  // Phone is searchable but not unique because two people may share a number.
+  @@index([phone])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | PRODUCTS AND VARIANTS
+ * |--------------------------------------------------------------------------
+ */
+
+model Product {
+  id          String          @id @default(cuid())
+  name        String
+  slug        String          @unique
+  description String?
+  category    ProductCategory
+  isActive    Boolean         @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants ProductVariant[]
+}
+
+model ProductVariant {
+  id        String @id @default(cuid())
+  name      String
+  sku       String @unique
+  productId String
+
+  /**
+   * Examples:
+   * Polaroid → Standard
+   * Phone Case → iPhone 15 Pro
+   * Vintage Letter → Normal Edge
+   * Vintage Letter → Burnt Edge
+   */
+  sellingPrice Decimal @db.Decimal(12, 2)
+
+  /**
+   * Used mainly for phone cases.
+   * Printable products can remain available while physical phone-case
+   * variants depend on inventory.
+   */
+  tracksStock Boolean @default(false)
+  isActive    Boolean @default(true)
+
+  /**
+   * Cost paid to an outside vendor per item.
+   * Photostrips and vintage letters can use this.
+   */
+  outsourcedUnitCost Decimal @default(0) @db.Decimal(12, 2)
+
+  supplierId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product  Product   @relation(fields: [productId], references: [id])
+  supplier Supplier? @relation("OutsourceSupplier", fields: [supplierId], references: [id])
+
+  orderItems    OrderItem[]
+  resourceRules ProductResourceRule[]
+
+  @@index([productId])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | ORDERS
+ * |--------------------------------------------------------------------------
+ */
+
+model Order {
+  id          String @id @default(cuid())
+  orderNumber String @unique
+
+  customerId String
+  source     OrderSource
+  status     OrderStatus @default(PENDING)
+
+  paymentStatus PaymentStatus @default(UNPAID)
+
+  subtotal    Decimal @db.Decimal(12, 2)
+  deliveryFee Decimal @default(0) @db.Decimal(12, 2)
+  discount    Decimal @default(0) @db.Decimal(12, 2)
+  totalAmount Decimal @db.Decimal(12, 2)
+
+  /**
+   * The customer's delivery fee and the actual courier cost
+   * are stored separately.
+   */
+  actualDeliveryCost Decimal @default(0) @db.Decimal(12, 2)
+
+  deliveryState   String?
+  deliveryAddress String?
+  trackingLink    String?
+
+  customerNote String?
+  adminNote    String?
+
+  /**
+   * Permanent cost and profit snapshots.
+   * Old order profit will not change when future material prices change.
+   */
+  revenueSnapshot       Decimal @default(0) @db.Decimal(12, 2)
+  materialCostSnapshot  Decimal @default(0) @db.Decimal(12, 2)
+  outsourceCostSnapshot Decimal @default(0) @db.Decimal(12, 2)
+  packagingCostSnapshot Decimal @default(0) @db.Decimal(12, 2)
+  deliveryCostSnapshot  Decimal @default(0) @db.Decimal(12, 2)
+  grossProfitSnapshot   Decimal @default(0) @db.Decimal(12, 2)
+
+  inventoryDeductedAt DateTime?
+  paidAt              DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  customer       Customer             @relation(fields: [customerId], references: [id])
+  items          OrderItem[]
+  payments       Payment[]
+  stockMovements ResourceMovement[]
+  statusHistory  OrderStatusHistory[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([source])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String @id @default(cuid())
+  orderId   String
+  variantId String
+
+  quantity Int
+
+  /**
+   * Price and cost are copied here when the order is placed.
+   * This preserves historical accuracy.
+   */
+  unitPriceSnapshot      Decimal @db.Decimal(12, 2)
+  totalPriceSnapshot     Decimal @db.Decimal(12, 2)
+  outsourcedCostSnapshot Decimal @default(0) @db.Decimal(12, 2)
+  materialCostSnapshot   Decimal @default(0) @db.Decimal(12, 2)
+
+  /**
+   * Stores product-specific details without creating dozens of columns.
+   * Examples:
+   * - uploaded image URLs
+   * - photostrip templates
+   * - letter contents
+   * - recipient name
+   * - burnt-edge selection
+   * - phone model
+   */
+  customization Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@index([orderId])
+  @@index([variantId])
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  status    OrderStatus
+  note      String?
+  changedAt DateTime    @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | PAYMENTS
+ * |--------------------------------------------------------------------------
+ */
+
+model Payment {
+  id      String @id @default(cuid())
+  orderId String
+
+  method    PaymentMethod
+  status    PaymentStatus
+  amount    Decimal       @db.Decimal(12, 2)
+  reference String?       @unique
+
+  paidAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | PHYSICAL RESOURCES / INVENTORY
+ * |--------------------------------------------------------------------------
+ */
+
+model Resource {
+  id       String           @id @default(cuid())
+  name     String
+  sku      String           @unique
+  category ResourceCategory
+
+  /**
+   * Inventory is stored using its smallest useful unit.
+   * Film: SHEET
+   * Mailer bags: PIECE
+   * Stickers: PIECE
+   * Phone cases: PIECE
+   */
+  unit String
+
+  /**
+   * Cached balance for fast dashboard queries.
+   * Every change must also create a ResourceMovement.
+   */
+  currentStock      Decimal @default(0) @db.Decimal(12, 2)
+  averageUnitCost   Decimal @default(0) @db.Decimal(12, 2)
+  lowStockThreshold Decimal @default(0) @db.Decimal(12, 2)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  productRules  ProductResourceRule[]
+  orderRules    OrderResourceRule[]
+  movements     ResourceMovement[]
+  purchaseItems PurchaseItem[]
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | PRODUCT RESOURCE RULES
+ * |--------------------------------------------------------------------------
+ */
+
+model ProductResourceRule {
+  id         String @id @default(cuid())
+  variantId  String
+  resourceId String
+
+  rule ConsumptionRule
+
+  /**
+   * PER_UNIT:
+   * 1 film sheet × each Polaroid.
+   * CAPACITY:
+   * 1 box per 20 Polaroids.
+   * FIXED:
+   * A fixed quantity once for that line item.
+   */
+  quantity Decimal @default(1) @db.Decimal(12, 2)
+  capacity Int?
+
+  /**
+   * Rules sharing a usageGroup are totalled together first.
+   * Example:
+   * Normal Polaroids and phone cases with Polaroids can both use:
+   * usageGroup = "POLAROID_PRINT"
+   * This allows one combined box calculation.
+   */
+  usageGroup String?
+
+  variant  ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  resource Resource       @relation(fields: [resourceId], references: [id])
+
+  @@index([variantId])
+  @@index([resourceId])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | ORDER-LEVEL PACKAGING
+ * |--------------------------------------------------------------------------
+ */
+
+model OrderResourceRule {
+  id         String @id @default(cuid())
+  resourceId String
+
+  /**
+   * Examples applied once per paid order:
+   * Mailer bag × 1
+   * Thank-you card × 1
+   * Sticker × 2
+   */
+  quantity Decimal @db.Decimal(12, 2)
+  isActive Boolean @default(true)
+
+  resource Resource @relation(fields: [resourceId], references: [id])
+
+  @@index([resourceId])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | INVENTORY MOVEMENT HISTORY
+ * |--------------------------------------------------------------------------
+ */
+
+model ResourceMovement {
+  id         String @id @default(cuid())
+  resourceId String
+
+  /**
+   * Positive numbers add stock.
+   * Negative numbers deduct stock.
+   */
+  quantity Decimal @db.Decimal(12, 2)
+
+  unitCost Decimal        @default(0) @db.Decimal(12, 2)
+  reason   MovementReason
+  note     String?
+
+  orderId    String?
+  purchaseId String?
+
+  createdAt DateTime @default(now())
+
+  resource Resource  @relation(fields: [resourceId], references: [id])
+  order    Order?    @relation(fields: [orderId], references: [id])
+  purchase Purchase? @relation(fields: [purchaseId], references: [id])
+
+  @@index([resourceId])
+  @@index([orderId])
+  @@index([purchaseId])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | SUPPLIERS AND PURCHASES
+ * |--------------------------------------------------------------------------
+ */
+
+model Supplier {
+  id       String  @id @default(cuid())
+  name     String
+  phone    String?
+  email    String?
+  note     String?
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchases          Purchase[]
+  outsourcedVariants ProductVariant[] @relation("OutsourceSupplier")
+}
+
+model Purchase {
+  id         String  @id @default(cuid())
+  supplierId String?
+
+  totalCost   Decimal  @db.Decimal(12, 2)
+  note        String?
+  purchasedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  supplier  Supplier?          @relation(fields: [supplierId], references: [id])
+  items     PurchaseItem[]
+  movements ResourceMovement[]
+
+  @@index([supplierId])
+}
+
+model PurchaseItem {
+  id         String @id @default(cuid())
+  purchaseId String
+  resourceId String
+
+  /**
+   * Example:
+   * purchaseQuantity = 3 packs
+   * unitsPerPurchaseUnit = 20 sheets
+   * totalBaseUnits = 60 sheets
+   */
+  purchaseQuantity     Decimal @db.Decimal(12, 2)
+  purchaseUnit         String
+  unitsPerPurchaseUnit Decimal @default(1) @db.Decimal(12, 2)
+  totalBaseUnits       Decimal @db.Decimal(12, 2)
+
+  totalCost Decimal @db.Decimal(12, 2)
+  unitCost  Decimal @db.Decimal(12, 2)
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  resource Resource @relation(fields: [resourceId], references: [id])
+
+  @@index([purchaseId])
+  @@index([resourceId])
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | BUSINESS EXPENSES
+ * |--------------------------------------------------------------------------
+ */
+
+model Expense {
+  id          String          @id @default(cuid())
+  title       String
+  description String?
+  category    ExpenseCategory
+
+  amount Decimal @db.Decimal(12, 2)
+
+  /**
+   * Optional connection to an order when an expense belongs directly
+   * to one customer's order.
+   */
+  relatedOrderId String?
+
+  expenseDate DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([expenseDate])
+}
+
+model OwnerWithdrawal {
+  id          String   @id @default(cuid())
+  amount      Decimal  @db.Decimal(12, 2)
+  description String?
+  withdrawnAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+}
+
+/**
+ * |--------------------------------------------------------------------------
+ * | ENUMS
+ * |--------------------------------------------------------------------------
+ */
+
+enum ProductCategory {
+  POLAROID
+  PHONE_CASE
+  PHOTOSTRIP
+  VINTAGE_LETTER
+  ALBUM
+}
+
+enum OrderSource {
+  WEBSITE
+  WHATSAPP
+  INSTAGRAM
+  MANUAL
+}
+
+enum OrderStatus {
+  PENDING
+  DESIGNING
+  PRINTING
+  PACKING
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  FAILED
+}
+
+enum PaymentMethod {
+  PAYSTACK
+  TRANSFER
+  OPAY
+}
+
+enum ResourceCategory {
+  MATERIAL
+  PACKAGING
+  CONSUMABLE
+  FINISHED_GOOD
+}
+
+enum ConsumptionRule {
+  PER_UNIT
+  FIXED
+  CAPACITY
+}
+
+enum MovementReason {
+  PURCHASE
+  ORDER_USAGE
+  DAMAGE
+  WASTE
+  PERSONAL_USE
+  MANUAL_ADJUSTMENT
+  RETURN
+}
+
+enum ExpenseCategory {
+  DATA
+  HOSTING
+  SALARY
+  MARKETING
+  DELIVERY
+  UTILITIES
+  EQUIPMENT
+  MATERIAL_PURCHASE
+  OUTSOURCING
+  OTHER
+}
