@@ -21,6 +21,8 @@ import {
 import { CreateResourceDto } from './dto/create-resource.dto';
 import { UpdateResourceDto } from './dto/update-resource.dto';
 import { ResourcesService } from './resources.service';
+import { RestockResourceDto } from './dto/restock-resource.dto';
+import { InventoryService } from '../inventory/inventory.service';
 
 const resourceExample = {
   id: 'cmrwr5resource0001',
@@ -39,7 +41,10 @@ const resourceExample = {
 @ApiTags('resources')
 @Controller('resources')
 export class ResourcesController {
-  constructor(private readonly resourcesService: ResourcesService) {}
+  constructor(
+    private readonly resourcesService: ResourcesService,
+    private readonly inventoryService: InventoryService,
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Create a new resource' })
@@ -49,6 +54,19 @@ export class ResourcesController {
   })
   create(@Body() dto: CreateResourceDto) {
     return this.resourcesService.create(dto);
+  }
+
+  @Post(':id/restock')
+  @ApiOperation({
+    summary: 'Restock a resource',
+  })
+  restock(@Param('id') id: string, @Body() dto: RestockResourceDto) {
+    return this.inventoryService.restockResource(
+      id,
+      dto.quantity,
+      dto.unitCost,
+      dto.note,
+    );
   }
 
   @Get()

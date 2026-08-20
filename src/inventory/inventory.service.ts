@@ -4,161 +4,194 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
-import { MovementReason } from '../generated/prisma/enums';
+import { MovementReason, Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-
-type AdjustStockInput = {
-  resourceId: string;
-  quantity: number;
-  reason: MovementReason;
-  note?: string;
-  orderId?: string;
-  purchaseId?: string;
-  unitCost?: number;
-};
 
 @Injectable()
 export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async adjustStock(input: AdjustStockInput) {
-    if (input.quantity === 0) {
-      throw new BadRequestException(
-        'Stock adjustment quantity cannot be zero',
-      );
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      const resource = await tx.resource.findUnique({
-        where: {
-          id: input.resourceId,
-        },
-      });
-
-      if (!resource || !resource.isActive) {
-        throw new NotFoundException('Resource was not found');
-      }
-
-      const currentStock = Number(resource.currentStock);
-      const newStock = currentStock + input.quantity;
-
-      if (newStock < 0) {
-        throw new BadRequestException(
-          `Insufficient stock for "${resource.name}". Available: ${currentStock}`,
-        );
-      }
-
-      const updatedResource = await tx.resource.update({
-        where: {
-          id: input.resourceId,
-        },
-        data: {
-          currentStock: newStock,
-        },
-      });
-
-      const movement = await tx.resourceMovement.create({
-        data: {
-          resourceId: input.resourceId,
-          quantity: input.quantity,
-          unitCost: input.unitCost ?? resource.averageUnitCost,
-          reason: input.reason,
-          note: input.note,
-          orderId: input.orderId,
-          purchaseId: input.purchaseId,
-        },
-      });
-
-      return {
-        resource: updatedResource,
-        movement,
-      };
-    });
-  }
-
-  async addStock(
+  async restockResource(
     resourceId: string,
     quantity: number,
-    options?: {
-      note?: string;
+    unitCost: number,
+    note?: string,
+  ) {
+    return this.prisma.$transaction(
+      async (tx) =>
+        this.applyResourceRestock(tx, {
+          resourceId,
+          quantity,
+          unitCost,
+          note,
+        }),
+      {
+        maxWait: 15_000,
+        timeout: 30_000,
+      },
+    );
+  }
+
+  /**
+   * Adds stock for a single resource and records the movement.
+   *
+   * This is the single reusable "add stock" primitive. It is transaction
+   * aware so it can be called on its own (via restockResource) or as one
+   * step inside a larger purchase transaction (via PurchasesService). It
+   * never opens its own transaction, so a caller can restock several
+   * resources atomically.
+   *
+   * The average unit cost is updated with weighted-average costing:
+   *
+   *   newAverage =
+   *     (oldStock × oldAverage + addedQuantity × unitCost)
+   *     ────────────────────────────────────────────────
+   *                    oldStock + addedQuantity
+   *
+   * If the resource previously had zero stock, the new average simply
+   * becomes the incoming unit cost.
+   */
+  async applyResourceRestock(
+    tx: Prisma.TransactionClient,
+    params: {
+      resourceId: string;
+      quantity: number;
+      unitCost: number;
       purchaseId?: string;
-      unitCost?: number;
-    },
-  ) {
-    if (quantity <= 0) {
-      throw new BadRequestException(
-        'Stock quantity to add must be greater than zero',
-      );
-    }
-
-    return this.adjustStock({
-      resourceId,
-      quantity,
-      reason: MovementReason.PURCHASE,
-      note: options?.note,
-      purchaseId: options?.purchaseId,
-      unitCost: options?.unitCost,
-    });
-  }
-
-  async consumeStock(
-    resourceId: string,
-    quantity: number,
-    options?: {
+      reason?: MovementReason;
       note?: string;
-      orderId?: string;
     },
   ) {
-    if (quantity <= 0) {
+    const { resourceId, quantity, unitCost } = params;
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new BadRequestException(
-        'Stock quantity to consume must be greater than zero',
+        'Restock quantity must be greater than zero',
       );
     }
 
-    return this.adjustStock({
-      resourceId,
-      quantity: -quantity,
-      reason: MovementReason.ORDER_USAGE,
-      note: options?.note,
-      orderId: options?.orderId,
+    if (!Number.isFinite(unitCost) || unitCost < 0) {
+      throw new BadRequestException('Unit cost cannot be negative');
+    }
+
+    const resource = await tx.resource.findUnique({
+      where: {
+        id: resourceId,
+      },
     });
+
+    if (!resource || !resource.isActive) {
+      throw new NotFoundException(
+        `Resource with ID "${resourceId}" was not found`,
+      );
+    }
+
+    const oldStock = Number(resource.currentStock);
+
+    const oldAverageCost = Number(resource.averageUnitCost);
+
+    const newStock = oldStock + quantity;
+
+    const newAverageCost =
+      newStock === 0
+        ? 0
+        : (oldStock * oldAverageCost + quantity * unitCost) / newStock;
+
+    if (!Number.isFinite(newAverageCost)) {
+      throw new BadRequestException('Calculated average unit cost is invalid');
+    }
+
+    const updatedResource = await tx.resource.update({
+      where: {
+        id: resource.id,
+      },
+      data: {
+        currentStock: newStock,
+        averageUnitCost: newAverageCost,
+      },
+    });
+
+    const movement = await tx.resourceMovement.create({
+      data: {
+        resourceId: resource.id,
+        quantity,
+        unitCost,
+        reason: params.reason ?? MovementReason.PURCHASE,
+        purchaseId: params.purchaseId,
+        note: params.note ?? `Restocked ${quantity} ${resource.unit}`,
+      },
+    });
+
+    return {
+      resource: updatedResource,
+      movement,
+    };
   }
 
-  async recordWaste(
+  async consumeResource(
+    tx: Prisma.TransactionClient,
     resourceId: string,
     quantity: number,
+    orderId: string,
     note?: string,
   ) {
     if (quantity <= 0) {
       throw new BadRequestException(
-        'Waste quantity must be greater than zero',
+        'Inventory quantity must be greater than zero',
       );
     }
 
-    return this.adjustStock({
-      resourceId,
-      quantity: -quantity,
-      reason: MovementReason.WASTE,
-      note,
+    const resource = await tx.resource.findUnique({
+      where: {
+        id: resourceId,
+      },
     });
-  }
 
-  async recordDamage(
-    resourceId: string,
-    quantity: number,
-    note?: string,
-  ) {
-    if (quantity <= 0) {
+    if (!resource || !resource.isActive) {
+      throw new NotFoundException(
+        `Resource with ID "${resourceId}" was not found`,
+      );
+    }
+
+    const currentStock = Number(resource.currentStock);
+
+    if (currentStock < quantity) {
       throw new BadRequestException(
-        'Damage quantity must be greater than zero',
+        `Not enough ${resource.name}. Available: ${currentStock}, required: ${quantity}`,
       );
     }
 
-    return this.adjustStock({
-      resourceId,
-      quantity: -quantity,
-      reason: MovementReason.DAMAGE,
-      note,
+    const unitCost = Number(resource.averageUnitCost);
+
+    await tx.resource.update({
+      where: {
+        id: resource.id,
+      },
+      data: {
+        currentStock: {
+          decrement: quantity,
+        },
+      },
     });
+
+    await tx.resourceMovement.create({
+      data: {
+        resourceId: resource.id,
+        orderId,
+        quantity: -quantity,
+        unitCost,
+        reason: MovementReason.ORDER_USAGE,
+        note: note ?? `Consumed for order ${orderId}`,
+      },
+    });
+
+    return {
+      resourceId: resource.id,
+      resourceName: resource.name,
+      category: resource.category,
+      quantity,
+      unitCost,
+      totalCost: unitCost * quantity,
+    };
   }
 }

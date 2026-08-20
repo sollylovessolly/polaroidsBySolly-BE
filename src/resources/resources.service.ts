@@ -49,15 +49,26 @@ export class ResourcesService {
       },
     });
 
-    if (!lowStock) {
-      return resources;
-    }
-
-    return resources.filter(
-      (resource) =>
-        Number(resource.currentStock) <=
+    const reported = resources.map((resource) => ({
+      ...resource,
+      stockStatus: this.stockStatus(
+        Number(resource.currentStock),
         Number(resource.lowStockThreshold),
-    );
+      ),
+    }));
+    return lowStock
+      ? reported.filter((resource) => resource.stockStatus !== 'OK')
+      : reported;
+  }
+
+  async lowStock() {
+    return this.findAll(true);
+  }
+
+  private stockStatus(stock: number, threshold: number) {
+    if (stock <= 0) return 'OUT_OF_STOCK' as const;
+    if (stock <= threshold) return 'LOW' as const;
+    return 'OK' as const;
   }
 
   async findOne(id: string) {
@@ -76,9 +87,7 @@ export class ResourcesService {
     });
 
     if (!resource) {
-      throw new NotFoundException(
-        `Resource with ID "${id}" was not found`,
-      );
+      throw new NotFoundException(`Resource with ID "${id}" was not found`);
     }
 
     return resource;

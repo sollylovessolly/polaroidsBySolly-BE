@@ -1,12 +1,27 @@
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import helmet from 'helmet';
 
 import { AppModule } from './app.module';
+import { SafeExceptionFilter } from './security/safe-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+    bodyParser: false,
+  });
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      hsts:
+        process.env.NODE_ENV === 'production'
+          ? { maxAge: 31_536_000, includeSubDomains: true }
+          : false,
+    }),
+  );
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -17,13 +32,17 @@ async function bootstrap() {
   );
 
   const configService = app.get(ConfigService);
+  app.useGlobalFilters(new SafeExceptionFilter());
+  const bodyLimit = configService.get<string>('JSON_BODY_LIMIT', '1mb');
+  app.useBodyParser('json', { limit: bodyLimit });
+  app.useBodyParser('urlencoded', { limit: bodyLimit, extended: true });
 
   const port = configService.get<number>('PORT', 4000);
 
-  const frontendUrl = configService.get<string>(
-    'FRONTEND_URL',
-    'http://localhost:3000',
-  );
+  const allowedOrigins = [
+    configService.get<string>('FRONTEND_URL', 'http://localhost:3000'),
+    configService.get<string>('ADMIN_FRONTEND_URL', 'http://localhost:3001'),
+  ].filter(Boolean);
 
   app.setGlobalPrefix('api');
 
@@ -33,6 +52,7 @@ async function bootstrap() {
       'API documentation for PolaroidsBySolly products, orders, inventory and business management',
     )
     .setVersion('1.0')
+    .addBearerAuth()
     .build();
 
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
@@ -40,7 +60,16 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, swaggerDocument);
 
   app.enableCors({
-    origin: frontendUrl,
+    origin(
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void,
+    ) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(null, false);
+    },
     credentials: true,
   });
 

@@ -4,13 +4,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { InventoryAvailabilityService } from '../inventory/inventory-availability.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly inventoryAvailability: InventoryAvailabilityService,
+  ) {}
 
   async create(createProductDto: CreateProductDto) {
     const existingProduct = await this.prisma.product.findUnique({
@@ -31,17 +35,46 @@ export class ProductsService {
   }
 
   async findAll() {
-    return this.prisma.product.findMany({
+    const products = await this.prisma.product.findMany({
       where: {
         isActive: true,
       },
       include: {
-        variants: true,
+        variants: {
+          where: {
+            isActive: true,
+          },
+        },
       },
       orderBy: {
         createdAt: 'desc',
       },
     });
+
+    const variantIds = products.flatMap((product) =>
+      product.variants.map((variant) => variant.id),
+    );
+
+    const availabilityMap =
+      await this.inventoryAvailability.getVariantAvailability(variantIds);
+
+    return products.map((product) => ({
+      ...product,
+
+      variants: product.variants.map((variant) => {
+        const availability = availabilityMap.get(variant.id);
+
+        return {
+          ...variant,
+
+          inStock: availability?.inStock ?? true,
+
+          availableQuantity: availability?.availableQuantity ?? null,
+
+          reasonIfUnavailable: availability?.reasonIfUnavailable ?? null,
+        };
+      }),
+    }));
   }
 
   async findOne(id: string) {
@@ -56,7 +89,28 @@ export class ProductsService {
       throw new NotFoundException(`Product with ID "${id}" was not found`);
     }
 
-    return product;
+    const availabilityMap =
+      await this.inventoryAvailability.getVariantAvailability(
+        product.variants.map((variant) => variant.id),
+      );
+
+    return {
+      ...product,
+
+      variants: product.variants.map((variant) => {
+        const availability = availabilityMap.get(variant.id);
+
+        return {
+          ...variant,
+
+          inStock: availability?.inStock ?? true,
+
+          availableQuantity: availability?.availableQuantity ?? null,
+
+          reasonIfUnavailable: availability?.reasonIfUnavailable ?? null,
+        };
+      }),
+    };
   }
 
   async update(id: string, updateProductDto: UpdateProductDto) {

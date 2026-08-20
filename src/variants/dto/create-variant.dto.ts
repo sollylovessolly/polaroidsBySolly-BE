@@ -1,7 +1,4 @@
-import {
-  ApiProperty,
-  ApiPropertyOptional,
-} from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsInt,
@@ -47,8 +44,7 @@ export class CreateVariantDto {
   @ApiPropertyOptional({
     example: true,
     default: false,
-    description:
-      'Whether availability depends on physical inventory',
+    description: 'Whether availability depends on physical inventory',
   })
   @IsOptional()
   @IsBoolean()
@@ -65,8 +61,7 @@ export class CreateVariantDto {
   @ApiPropertyOptional({
     example: 1200,
     default: 0,
-    description:
-      'Cost paid to an external vendor for one unit',
+    description: 'Cost paid to an external vendor for one unit',
   })
   @IsOptional()
   @IsInt()
