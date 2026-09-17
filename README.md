@@ -37,7 +37,11 @@ Provider configuration is optional during local development:
 - Paystack: keep `PAYSTACK_SECRET_KEY=sk_test_...` until business live activation. Switching later is an environment-only change to `sk_live_...`.
 - Shipbubble: start with an `sb_sandbox_...` key. Without a key, payment remains operational and shipment creation reports `PROVIDER_DISABLED`.
 - Supabase: configure the service-role key only on the backend and keep the bucket private.
-- Email: set `RESEND_API_KEY` and `EMAIL_FROM`.
+- Email: set `RESEND_API_KEY`, `EMAIL_FROM`, and optionally
+  `OWNER_NOTIFICATION_EMAIL` (falls back to `ADMIN_EMAIL`).
+- Discord: set `DISCORD_WEBHOOK_URL` to notify the owner about paid orders.
+- Telegram: set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_OWNER_CHAT_ID`.
+- SMS: set the Termii API key, approved sender ID, channel, and owner phone.
 - WhatsApp: set Meta Cloud API token, phone-number ID, and owner phone.
 
 ## Database operations

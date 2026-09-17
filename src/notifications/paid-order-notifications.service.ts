@@ -4,6 +4,9 @@ import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from './email.service';
 import { WhatsAppNotificationService } from './whatsapp-notification.service';
+import { TelegramNotificationService } from './telegram-notification.service';
+import { SmsNotificationService } from './sms-notification.service';
+import { DiscordNotificationService } from './discord-notification.service';
 
 type PaidOrder = Prisma.OrderGetPayload<{
   include: {
@@ -18,6 +21,9 @@ export class PaidOrderNotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly whatsapp: WhatsAppNotificationService,
+    private readonly telegram: TelegramNotificationService,
+    private readonly sms: SmsNotificationService,
+    private readonly discord: DiscordNotificationService,
     private readonly email: EmailService,
     private readonly config: ConfigService,
   ) {}
@@ -32,12 +38,16 @@ export class PaidOrderNotificationsService {
     });
     if (!order || order.paymentStatus !== 'PAID') return;
     await Promise.allSettled([
-      this.notifyOwner(order),
+      this.notifyOwnerByWhatsApp(order),
+      this.notifyOwnerByTelegram(order),
+      this.notifyOwnerBySms(order),
+      this.notifyOwnerByDiscord(order),
+      this.notifyOwnerByEmail(order),
       this.emailCustomer(order),
     ]);
   }
 
-  private async notifyOwner(order: PaidOrder) {
+  private async notifyOwnerByWhatsApp(order: PaidOrder) {
     const claimedAt = new Date();
     const claim = await this.prisma.order.updateMany({
       where: { id: order.id, ownerNotifiedAt: null },
@@ -45,11 +55,8 @@ export class PaidOrderNotificationsService {
     });
     if (!claim.count) return;
     try {
-      const items = order.items
-        .map((item) => `${item.quantity} × ${item.variant.product.name}`)
-        .join('\n');
       const sent = await this.whatsapp.sendOwnerMessage(
-        `New paid order 🎉\n\nOrder: ${order.orderNumber}\nCustomer: ${order.customer.name}\nPhone: ${order.customer.phone}\nSource: ${order.source}\nTotal: ${this.money(order.totalAmount)}\nDelivery: ${order.deliveryState ?? 'Not specified'}\n\nItems:\n${items}`,
+        this.ownerMessage(order),
       );
       if (!sent) await this.release('ownerNotifiedAt', order.id, claimedAt);
     } catch (error) {
@@ -60,6 +67,82 @@ export class PaidOrderNotificationsService {
         orderNumber: order.orderNumber,
         errorName: error instanceof Error ? error.name : 'UnknownError',
       });
+    }
+  }
+
+  private async notifyOwnerByTelegram(order: PaidOrder) {
+    const claimedAt = new Date();
+    const claim = await this.prisma.order.updateMany({
+      where: { id: order.id, ownerTelegramSentAt: null },
+      data: { ownerTelegramSentAt: claimedAt },
+    });
+    if (!claim.count) return;
+    try {
+      const sent = await this.telegram.sendOwnerMessage(
+        this.ownerMessage(order),
+      );
+      if (!sent) await this.release('ownerTelegramSentAt', order.id, claimedAt);
+    } catch (error) {
+      await this.release('ownerTelegramSentAt', order.id, claimedAt);
+      this.logOwnerFailure('owner_telegram_notification_failed', order, error);
+    }
+  }
+
+  private async notifyOwnerByEmail(order: PaidOrder) {
+    const to =
+      this.config.get<string>('OWNER_NOTIFICATION_EMAIL')?.trim() ||
+      this.config.get<string>('ADMIN_EMAIL')?.trim();
+    if (!to) return;
+    const claimedAt = new Date();
+    const claim = await this.prisma.order.updateMany({
+      where: { id: order.id, ownerEmailSentAt: null },
+      data: { ownerEmailSentAt: claimedAt },
+    });
+    if (!claim.count) return;
+    try {
+      const sent = await this.email.send({
+        to,
+        subject: `New paid order — ${order.orderNumber}`,
+        text: this.ownerMessage(order),
+      });
+      if (!sent) await this.release('ownerEmailSentAt', order.id, claimedAt);
+    } catch (error) {
+      await this.release('ownerEmailSentAt', order.id, claimedAt);
+      this.logOwnerFailure('owner_email_notification_failed', order, error);
+    }
+  }
+
+  private async notifyOwnerBySms(order: PaidOrder) {
+    const claimedAt = new Date();
+    const claim = await this.prisma.order.updateMany({
+      where: { id: order.id, ownerSmsSentAt: null },
+      data: { ownerSmsSentAt: claimedAt },
+    });
+    if (!claim.count) return;
+    try {
+      const sent = await this.sms.sendOwnerMessage(this.ownerSmsMessage(order));
+      if (!sent) await this.release('ownerSmsSentAt', order.id, claimedAt);
+    } catch (error) {
+      await this.release('ownerSmsSentAt', order.id, claimedAt);
+      this.logOwnerFailure('owner_sms_notification_failed', order, error);
+    }
+  }
+
+  private async notifyOwnerByDiscord(order: PaidOrder) {
+    const claimedAt = new Date();
+    const claim = await this.prisma.order.updateMany({
+      where: { id: order.id, ownerDiscordSentAt: null },
+      data: { ownerDiscordSentAt: claimedAt },
+    });
+    if (!claim.count) return;
+    try {
+      const sent = await this.discord.sendOwnerMessage(
+        this.ownerMessage(order),
+      );
+      if (!sent) await this.release('ownerDiscordSentAt', order.id, claimedAt);
+    } catch (error) {
+      await this.release('ownerDiscordSentAt', order.id, claimedAt);
+      this.logOwnerFailure('owner_discord_notification_failed', order, error);
     }
   }
 
@@ -96,13 +179,43 @@ export class PaidOrderNotificationsService {
   }
 
   private release(
-    field: 'ownerNotifiedAt' | 'customerEmailSentAt',
+    field:
+      | 'ownerNotifiedAt'
+      | 'ownerEmailSentAt'
+      | 'ownerTelegramSentAt'
+      | 'ownerSmsSentAt'
+      | 'ownerDiscordSentAt'
+      | 'customerEmailSentAt',
     id: string,
     claimedAt: Date,
   ) {
     return this.prisma.order.updateMany({
       where: { id, [field]: claimedAt },
       data: { [field]: null },
+    });
+  }
+
+  private ownerMessage(order: PaidOrder) {
+    const items = order.items
+      .map((item) => `${item.quantity} × ${item.variant.product.name}`)
+      .join('\n');
+    return `New paid order 🎉\n\nOrder: ${order.orderNumber}\nCustomer: ${order.customer.name}\nPhone: ${order.customer.phone}\nSource: ${order.source}\nTotal: ${this.money(order.totalAmount)}\nDelivery: ${order.deliveryState ?? 'Not specified'}\n\nItems:\n${items}`;
+  }
+
+  private ownerSmsMessage(order: PaidOrder) {
+    const items = order.items
+      .map((item) => `${item.quantity}x ${item.variant.product.name}`)
+      .join(', ');
+    const message = `Paid order ${order.orderNumber}. ${order.customer.name}, ${order.customer.phone}. Total NGN ${Number(order.totalAmount).toFixed(0)}. Delivery: ${order.deliveryState ?? 'Not specified'}. Items: ${items}`;
+    return message.slice(0, 300);
+  }
+
+  private logOwnerFailure(event: string, order: PaidOrder, error: unknown) {
+    this.logger.error({
+      event,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
     });
   }
 

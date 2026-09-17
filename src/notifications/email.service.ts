@@ -15,6 +15,7 @@ export class EmailService {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
+        'User-Agent': 'PolaroidsBySolly/1.0',
       },
       body: JSON.stringify({ from, ...input }),
     });

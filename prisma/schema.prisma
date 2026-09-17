@@ -133,15 +133,19 @@ model Order {
   inventoryDeductedAt   DateTime?
   inventoryRestoredAt   DateTime?
   ownerNotifiedAt       DateTime?
+  ownerEmailSentAt      DateTime?
+  ownerTelegramSentAt   DateTime?
+  ownerSmsSentAt        DateTime?
+  ownerDiscordSentAt    DateTime?
   customerEmailSentAt   DateTime?
   shipmentRequestToken  String?
-  shipmentServiceCode  String?
-  shipmentCourierId    String?
-  shipmentReference    String?              @unique
-  shipmentStatus       String?
-  shipmentError        String?
-  shipmentAttemptedAt  DateTime?
-  shipmentCreatedAt    DateTime?
+  shipmentServiceCode   String?
+  shipmentCourierId     String?
+  shipmentReference     String?              @unique
+  shipmentStatus        String?
+  shipmentError         String?
+  shipmentAttemptedAt   DateTime?
+  shipmentCreatedAt     DateTime?
   paidAt                DateTime?
   createdAt             DateTime             @default(now())
   updatedAt             DateTime             @updatedAt
