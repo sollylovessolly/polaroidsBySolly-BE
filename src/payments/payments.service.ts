@@ -58,6 +58,17 @@ export class PaymentsService {
       );
     }
 
+    const pending = await this.prisma.paymentAttempt.findUnique({
+      where: { orderId: order.id },
+    });
+    if (pending && pending.expiresAt > new Date()) {
+      return {
+        authorizationUrl: pending.authorizationUrl,
+        accessCode: pending.accessCode,
+        reference: pending.reference,
+      };
+    }
+
     const initialized = await this.paystack.initializeTransaction({
       email: order.customer.email,
       amount: this.nairaToKobo(order.totalAmount),
@@ -68,11 +79,28 @@ export class PaymentsService {
       },
     });
 
-    return {
+    const response = {
       authorizationUrl: initialized.authorization_url,
       accessCode: initialized.access_code,
       reference: initialized.reference,
     };
+    await this.prisma.paymentAttempt.upsert({
+      where: { orderId: order.id },
+      update: {
+        reference: response.reference,
+        authorizationUrl: response.authorizationUrl,
+        accessCode: response.accessCode,
+        expiresAt: new Date(Date.now() + 30 * 60_000),
+      },
+      create: {
+        orderId: order.id,
+        reference: response.reference,
+        authorizationUrl: response.authorizationUrl,
+        accessCode: response.accessCode,
+        expiresAt: new Date(Date.now() + 30 * 60_000),
+      },
+    });
+    return response;
   }
 
   async verify(dto: VerifyPaymentDto) {
@@ -151,10 +179,44 @@ export class PaymentsService {
         method: input.method,
         reason: error.message,
       });
-      throw new ConflictException(
-        `Payment was recorded, but fulfillment is blocked: ${error.message}`,
-      );
+      throw new ConflictException({
+        code: 'PAYMENT_RECEIVED_FULFILLMENT_BLOCKED',
+        message: `Payment was recorded, but fulfillment is blocked: ${error.message}`,
+        paymentReceived: true,
+        fulfillmentBlocked: true,
+        orderId: order.id,
+      });
     }
+  }
+
+  async retryBlockedFulfillment(orderId: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        payments: {
+          where: { status: PaymentStatus.PAID },
+          orderBy: { paidAt: 'asc' },
+          take: 1,
+        },
+      },
+    });
+    if (!order)
+      throw new NotFoundException(`Order with ID "${orderId}" was not found`);
+    if (order.paymentStatus !== PaymentStatus.PAID || !order.payments[0])
+      throw new BadRequestException(
+        'No successful payment exists for this order',
+      );
+    if (order.inventoryDeductedAt)
+      return this.prisma.order.findUnique({ where: { id: orderId } });
+
+    const payment = order.payments[0];
+    return this.finalizePaidOrder({
+      orderId,
+      reference: payment.reference ?? `RECOVERY-${payment.id}`,
+      amountInKobo: this.nairaToKobo(payment.amount),
+      paidAt: payment.paidAt ?? new Date(),
+      method: payment.method,
+    });
   }
 
   async findAll(filters: PaymentFiltersDto = {}) {
@@ -257,9 +319,13 @@ export class PaymentsService {
         method: PaymentMethod.PAYSTACK,
         reason: error.message,
       });
-      throw new ConflictException(
-        `Payment was verified, but fulfillment is blocked: ${error.message}`,
-      );
+      throw new ConflictException({
+        code: 'PAYMENT_RECEIVED_FULFILLMENT_BLOCKED',
+        message: `Payment was verified, but fulfillment is blocked: ${error.message}`,
+        paymentReceived: true,
+        fulfillmentBlocked: true,
+        orderId,
+      });
     }
   }
 
@@ -298,10 +364,24 @@ export class PaymentsService {
         }
 
         if (
-          existingPayment?.status === PaymentStatus.PAID ||
-          (order.paymentStatus === PaymentStatus.PAID &&
-            order.inventoryDeductedAt)
+          order.paymentStatus === PaymentStatus.PAID &&
+          order.inventoryDeductedAt
         ) {
+          if (!existingPayment) {
+            await tx.payment.create({
+              data: {
+                orderId: order.id,
+                method: input.method,
+                status: PaymentStatus.PAID,
+                amount: new Prisma.Decimal(input.amountInKobo).dividedBy(100),
+                reference: input.reference,
+                paidAt: input.paidAt,
+                reconciliationRequired: true,
+                reconciliationReason:
+                  'Additional successful payment received for an already fulfilled order',
+              },
+            });
+          }
           return {
             order: await this.getOrderResponse(tx, order.id),
             transitioned: false,
@@ -463,11 +543,37 @@ export class PaymentsService {
   private getOrderResponse(tx: Prisma.TransactionClient, orderId: string) {
     return tx.order.findUnique({
       where: { id: orderId },
-      include: {
-        customer: true,
-        payments: true,
-        stockMovements: { include: { resource: true } },
-        items: { include: { variant: { include: { product: true } } } },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        paymentStatus: true,
+        subtotal: true,
+        deliveryFee: true,
+        discount: true,
+        totalAmount: true,
+        deliveryState: true,
+        trackingToken: true,
+        trackingLink: true,
+        paidAt: true,
+        createdAt: true,
+        customer: { select: { name: true, email: true, phone: true } },
+        items: {
+          select: {
+            id: true,
+            quantity: true,
+            unitPriceSnapshot: true,
+            totalPriceSnapshot: true,
+            customization: true,
+            variant: {
+              select: {
+                name: true,
+                sku: true,
+                product: { select: { name: true, category: true } },
+              },
+            },
+          },
+        },
       },
     });
   }

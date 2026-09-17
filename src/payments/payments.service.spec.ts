@@ -35,6 +35,10 @@ describe('PaymentsService', () => {
           customer: { email: 'jane@example.com' },
         }),
       },
+      paymentAttempt: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockResolvedValue({}),
+      },
     } as unknown as PrismaService;
     const initializeTransaction = jest.fn().mockResolvedValue({
       authorization_url: 'https://checkout.paystack.com/code',
@@ -127,7 +131,12 @@ describe('PaymentsService', () => {
         return Promise.resolve(payment);
       },
     );
-    const orderUpdate = jest.fn().mockResolvedValue(order);
+    const orderUpdate = jest.fn(
+      ({ data }: { data: Record<string, unknown> }) => {
+        Object.assign(order, data);
+        return Promise.resolve(order);
+      },
+    );
     const tx = {
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'order-1' }]),
       payment: {

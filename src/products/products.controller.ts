@@ -86,7 +86,7 @@ export class ProductsController {
   })
   @ApiNotFoundResponse({ description: 'Product not found' })
   findOne(@Param('id') id: string) {
-    return this.productsService.findOne(id);
+    return this.productsService.findOnePublic(id);
   }
 
   @Patch(':id')

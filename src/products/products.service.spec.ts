@@ -14,6 +14,7 @@ describe('ProductsService', () => {
       create: jest.fn(),
       update: jest.fn(),
     },
+    resource: { findMany: jest.fn().mockResolvedValue([]) },
   };
 
   const inventoryAvailabilityMock = {
@@ -49,7 +50,19 @@ describe('ProductsService', () => {
       {
         id: 'product-1',
         name: 'Polaroids',
-        variants: [{ id: 'variant-1', name: 'Standard' }],
+        slug: 'polaroids',
+        description: null,
+        category: 'POLAROID',
+        variants: [
+          {
+            id: 'variant-1',
+            name: 'Standard',
+            sku: 'POLAROID-STANDARD',
+            sellingPrice: 3500,
+            tracksStock: false,
+            isActive: true,
+          },
+        ],
       },
     ]);
 

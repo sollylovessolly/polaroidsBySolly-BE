@@ -28,6 +28,18 @@ export class TrackingController {
   @Get(':token')
   @ApiOperation({ summary: 'Open customer-safe tracking detail' })
   @ApiNotFoundResponse({ description: 'Tracked order was not found' })
+  @ApiOkResponse({
+    schema: {
+      example: {
+        orderNumber: 'PBS-123',
+        status: 'PROCESSING',
+        deliveryState: 'Lagos',
+        trackingLink: null,
+        createdAt: '2026-09-17T12:00:00.000Z',
+        items: [{ quantity: 1, productName: 'Polaroids' }],
+      },
+    },
+  })
   findOne(@Param('token') token: string) {
     return this.tracking.findOne(token);
   }

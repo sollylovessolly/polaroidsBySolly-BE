@@ -56,9 +56,22 @@ Never run `prisma migrate reset` against production. The seed is idempotent and 
 
 ## Core workflows
 
+Upload limits are 2 MB for previews, 15 MB for production PNGs, and 20 MB
+for production PDFs. Order customization accepts only opaque references issued
+by the matching backend upload purpose.
+
 ### Website order
 
 Catalogue and backend availability → private production-file references → website order → authoritative delivery and discount pricing → Paystack test checkout → server verification/webhook → inventory and frozen profit transaction → notifications and Shipbubble attempt → secure tracking.
+
+Website clients must send a stable `checkoutKey`. A repeated key returns the
+same order, and the returned unguessable `checkoutToken` can recover an unpaid
+checkout at `GET /api/orders/checkout/:token`. Paystack initialization reuses a
+pending authorization for 30 minutes. Shipbubble selections are bound to the
+quoted customer/address/cart and expire after 30 minutes. The current pricing
+policy intentionally charges the configured state delivery fee; courier quote
+totals are displayed for selection and the actual courier fee is frozen after
+shipment creation.
 
 The client submits a discount code, never a discount amount. `POST /api/shipping/rates` validates the recipient address and returns customer-safe Shipbubble choices. The selected opaque `requestToken`, `serviceCode`, and `courierId` are submitted with the order; Shipbubble remains the authority for the charged courier cost.
 

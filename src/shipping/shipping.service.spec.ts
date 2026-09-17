@@ -30,6 +30,7 @@ describe('ShippingService', () => {
           },
         ]),
       },
+      shippingQuote: { upsert: jest.fn().mockResolvedValue({}) },
     };
     const provider = {
       isConfigured: () => true,

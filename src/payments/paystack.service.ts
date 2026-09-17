@@ -37,13 +37,19 @@ export class PaystackService {
     amount: number;
     metadata: Record<string, string>;
   }) {
+    const frontend = (
+      this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000'
+    ).replace(/\/$/, '');
     const response = await this.request<{
       authorization_url: string;
       access_code: string;
       reference: string;
     }>('/transaction/initialize', {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...input,
+        callback_url: `${frontend}/payments/callback`,
+      }),
     });
 
     return response.data;

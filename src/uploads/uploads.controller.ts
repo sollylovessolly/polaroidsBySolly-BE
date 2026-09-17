@@ -9,7 +9,13 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiCreatedResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 
 import { UploadFileDto } from './dto/upload-file.dto';
 import { UploadedFileData, UploadsService } from './uploads.service';
@@ -28,6 +34,14 @@ export class UploadsController {
     FileInterceptor('file', { limits: { fileSize: 20_000_000 } }),
   )
   @ApiOperation({ summary: 'Upload a validated production file' })
+  @ApiCreatedResponse({
+    schema: {
+      example: {
+        key: 'production/polaroid_final/uuid.png',
+        url: 'https://api.example.com/api/uploads/files/opaque-token',
+      },
+    },
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {

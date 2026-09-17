@@ -93,6 +93,7 @@ describe('OrdersService order creation', () => {
       orderStatusHistory: { create: historyCreate },
     };
     const prisma = {
+      order: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn((callback: (client: typeof tx) => unknown) =>
         callback(tx),
       ),
@@ -122,8 +123,15 @@ describe('OrdersService order creation', () => {
       new PhoneNumberService(),
     );
 
+    const upload = (purpose: string, name: string) =>
+      `https://api.example/api/uploads/files/${Buffer.from(`production/${purpose}/${name}`).toString('base64url')}`;
     const result = await service.create({
-      customer: { name: 'Jane Doe', phone: '08012345678' },
+      checkoutKey: 'checkout-unit-test-1',
+      customer: {
+        name: 'Jane Doe',
+        phone: '08012345678',
+        email: 'jane@example.com',
+      },
       delivery: { state: 'Lagos', address: '12 Marina Road' },
       source: OrderSource.WEBSITE,
       items: [
@@ -131,19 +139,25 @@ describe('OrdersService order creation', () => {
           variantSku: 'POLAROID-STANDARD',
           quantity: 2,
           customization: {
-            finalPngUrl: 'https://storage/final.png',
-            previewUrl: 'https://storage/preview.png',
+            finalPngUrl: upload('polaroid_final', 'final.png'),
+            previewUrl: upload('polaroid_preview', 'preview.png'),
           },
         },
         {
           variantSku: 'VINTAGE-AMBER-BURNT',
           quantity: 1,
-          customization: { finalPdfUrl: 'https://storage/letter.pdf' },
+          customization: {
+            finalPdfUrl: upload('vintage_letter_final', 'letter.pdf'),
+          },
         },
         {
           variantSku: 'PHONECASE-IPHONE-15-PRO',
           quantity: 1,
-          customization: { package: 'WITH_POLAROID' },
+          customization: {
+            package: 'WITH_POLAROID',
+            finalPngUrl: upload('polaroid_final', 'case-final.png'),
+            previewUrl: upload('polaroid_preview', 'case-preview.png'),
+          },
         },
       ],
     });

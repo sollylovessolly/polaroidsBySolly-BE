@@ -7,7 +7,9 @@ import {
   IsInt,
   IsObject,
   IsOptional,
+  IsNotEmpty,
   IsString,
+  Matches,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -20,12 +22,14 @@ class CustomerDto {
     example: 'Jane Doe',
   })
   @IsString()
+  @IsNotEmpty()
   name!: string;
 
   @ApiProperty({
     example: '08012345678',
   })
   @IsString()
+  @Matches(/[0-9]{10,}/, { message: 'phone must be a valid phone number' })
   phone!: string;
 
   @ApiPropertyOptional({
@@ -41,12 +45,14 @@ class DeliveryDto {
     example: 'Lagos',
   })
   @IsString()
+  @IsNotEmpty()
   state!: string;
 
   @ApiProperty({
     example: '12 Marina Road, Victoria Island',
   })
   @IsString()
+  @IsNotEmpty()
   address!: string;
 }
 
@@ -88,6 +94,16 @@ class ShipmentSelectionDto {
 }
 
 export class CreateOrderDto {
+  @ApiPropertyOptional({
+    description:
+      'Stable client-generated idempotency key. Required for WEBSITE orders.',
+    example: 'checkout_550e8400-e29b-41d4-a716-446655440000',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  checkoutKey?: string;
+
   @ApiPropertyOptional({ example: 'WELCOME10' })
   @IsOptional()
   @IsString()

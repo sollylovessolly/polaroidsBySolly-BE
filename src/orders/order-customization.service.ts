@@ -16,35 +16,39 @@ export class OrderCustomizationService {
       case ProductCategory.POLAROID:
         return requireFulfillment
           ? {
-              finalPngUrl: this.requireUrl(
+              finalPngUrl: this.requireUpload(
                 customization,
                 'finalPngUrl',
                 'Polaroid order requires finalPngUrl',
+                'polaroid_final',
               ),
-              previewUrl: this.requireUrl(
+              previewUrl: this.requireUpload(
                 customization,
                 'previewUrl',
                 'Polaroid order requires previewUrl',
+                'polaroid_preview',
               ),
             }
           : this.pickOptional(customization, ['finalPngUrl', 'previewUrl']);
       case ProductCategory.PHOTOSTRIP:
         return requireFulfillment
           ? {
-              finalPngUrl: this.requireUrl(
+              finalPngUrl: this.requireUpload(
                 customization,
                 'finalPngUrl',
                 'Photostrip order requires finalPngUrl',
+                'photostrip_final',
               ),
             }
           : this.pickOptional(customization, ['finalPngUrl']);
       case ProductCategory.VINTAGE_LETTER:
         return requireFulfillment
           ? {
-              finalPdfUrl: this.requireUrl(
+              finalPdfUrl: this.requireUpload(
                 customization,
                 'finalPdfUrl',
                 'Vintage Letter order requires finalPdfUrl',
+                'vintage_letter_final',
               ),
             }
           : this.pickOptional(customization, ['finalPdfUrl']);
@@ -60,7 +64,33 @@ export class OrderCustomizationService {
           );
         }
 
-        return { package: packageOption };
+        if (packageOption === PhoneCasePackage.CASE_ONLY) {
+          return { package: packageOption };
+        }
+
+        return requireFulfillment
+          ? {
+              package: packageOption,
+              finalPngUrl: this.requireUpload(
+                customization,
+                'finalPngUrl',
+                'Phone Case with Polaroid requires finalPngUrl',
+                'polaroid_final',
+              ),
+              previewUrl: this.requireUpload(
+                customization,
+                'previewUrl',
+                'Phone Case with Polaroid requires previewUrl',
+                'polaroid_preview',
+              ),
+            }
+          : {
+              package: packageOption,
+              ...this.pickOptional(customization, [
+                'finalPngUrl',
+                'previewUrl',
+              ]),
+            };
       }
       case ProductCategory.ALBUM:
         return undefined;
@@ -93,6 +123,29 @@ export class OrderCustomizationService {
         throw new Error();
     } catch {
       throw new BadRequestException(`${field} must be a valid HTTP URL`);
+    }
+    return value;
+  }
+
+  private requireUpload(
+    customization: Customization | undefined,
+    field: string,
+    message: string,
+    purposePath: string,
+  ) {
+    const value = this.requireUrl(customization, field, message);
+    const parsed = new URL(value);
+    const match = parsed.pathname.match(/\/api\/uploads\/files\/([^/]+)$/);
+    if (!match)
+      throw new BadRequestException(`${field} must be a backend upload`);
+    let key = '';
+    try {
+      key = Buffer.from(match[1], 'base64url').toString('utf8');
+    } catch {
+      throw new BadRequestException(`${field} has an invalid upload token`);
+    }
+    if (!key.startsWith(`production/${purposePath}/`)) {
+      throw new BadRequestException(`${field} has the wrong upload purpose`);
     }
     return value;
   }

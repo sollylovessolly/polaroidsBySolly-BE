@@ -52,7 +52,38 @@ export class OrdersService {
         'Public order creation only accepts WEBSITE orders',
       );
     }
-    return this.createOrder(createOrderDto, true);
+    if (!createOrderDto.customer.email?.trim()) {
+      throw new BadRequestException(
+        'Customer email is required for website checkout',
+      );
+    }
+    if (!createOrderDto.customer.name.trim())
+      throw new BadRequestException('Customer name is required');
+    if (!createOrderDto.delivery.address.trim())
+      throw new BadRequestException('Delivery address is required');
+    if (!createOrderDto.checkoutKey?.trim())
+      throw new BadRequestException(
+        'checkoutKey is required for retry-safe website checkout',
+      );
+
+    const existing = await this.prisma.order.findUnique({
+      where: { checkoutKey: createOrderDto.checkoutKey.trim() },
+    });
+    if (existing) return this.getCheckoutResponse(existing.id);
+    try {
+      return await this.createOrder(createOrderDto, true);
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const raced = await this.prisma.order.findUnique({
+          where: { checkoutKey: createOrderDto.checkoutKey.trim() },
+        });
+        if (raced) return this.getCheckoutResponse(raced.id);
+      }
+      throw error;
+    }
   }
 
   async createManual(createOrderDto: CreateManualOrderDto) {
@@ -64,6 +95,28 @@ export class OrdersService {
     requireFulfillment: boolean,
     adminNote?: string,
   ) {
+    if (createOrderDto.shipment) {
+      if (!this.shipping)
+        throw new BadRequestException('Shipping service is unavailable');
+      if (!createOrderDto.customer.email)
+        throw new BadRequestException(
+          'Customer email is required for courier selection',
+        );
+      await this.shipping.validateSelection({
+        name: createOrderDto.customer.name,
+        email: createOrderDto.customer.email,
+        phone: createOrderDto.customer.phone,
+        address: createOrderDto.delivery.address,
+        state: createOrderDto.delivery.state,
+        items: createOrderDto.items.map((item) => ({
+          variantSku: item.variantSku,
+          quantity: item.quantity,
+        })),
+        requestToken: createOrderDto.shipment.requestToken,
+        serviceCode: createOrderDto.shipment.serviceCode,
+        courierId: createOrderDto.shipment.courierId,
+      });
+    }
     return this.prisma.$transaction(
       async (tx) => {
         const customer = await this.findOrCreateCustomer(
@@ -151,6 +204,8 @@ export class OrdersService {
           data: {
             orderNumber: this.generateOrderNumber(),
             trackingToken: randomBytes(32).toString('base64url'),
+            checkoutKey: createOrderDto.checkoutKey?.trim(),
+            checkoutToken: randomBytes(32).toString('base64url'),
 
             customerId: customer.id,
             source: createOrderDto.source,
@@ -223,6 +278,7 @@ export class OrdersService {
             deliveryAddress: true,
             customerNote: true,
             createdAt: true,
+            checkoutToken: true,
             customer: {
               select: {
                 id: true,
@@ -317,6 +373,82 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
     return paginated(data, total, page, limit);
+  }
+
+  async getCheckoutByToken(token: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { checkoutToken: token },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        paymentStatus: true,
+        subtotal: true,
+        deliveryFee: true,
+        discount: true,
+        totalAmount: true,
+        deliveryState: true,
+        checkoutToken: true,
+        createdAt: true,
+        items: {
+          select: {
+            quantity: true,
+            unitPriceSnapshot: true,
+            totalPriceSnapshot: true,
+            variant: {
+              select: {
+                name: true,
+                sku: true,
+                product: { select: { name: true, category: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!order) throw new NotFoundException('Checkout was not found');
+    return order;
+  }
+
+  private getCheckoutResponse(id: string) {
+    return this.prisma.order.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        orderNumber: true,
+        source: true,
+        paymentStatus: true,
+        status: true,
+        subtotal: true,
+        deliveryFee: true,
+        discount: true,
+        totalAmount: true,
+        deliveryState: true,
+        deliveryAddress: true,
+        customerNote: true,
+        checkoutToken: true,
+        createdAt: true,
+        customer: {
+          select: { id: true, name: true, phone: true, email: true },
+        },
+        items: {
+          select: {
+            id: true,
+            quantity: true,
+            unitPriceSnapshot: true,
+            totalPriceSnapshot: true,
+            customization: true,
+            variant: {
+              select: {
+                name: true,
+                sku: true,
+                product: { select: { name: true, category: true } },
+              },
+            },
+          },
+        },
+      },
+    });
   }
 
   async findOne(id: string) {
@@ -459,6 +591,10 @@ export class OrdersService {
       method: dto.method,
       reference: dto.reference,
     });
+  }
+
+  retryBlockedFulfillment(id: string) {
+    return this.payments.retryBlockedFulfillment(id);
   }
 
   retryShipment(id: string) {

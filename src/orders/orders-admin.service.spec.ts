@@ -185,6 +185,10 @@ describe('OrdersService admin workflow', () => {
   });
 
   it('replaces only validated fulfillment metadata on an order item', async () => {
+    const uploaded = (purpose: string, name: string) =>
+      `https://api.example/api/uploads/files/${Buffer.from(`production/${purpose}/${name}`).toString('base64url')}`;
+    const finalPngUrl = uploaded('polaroid_final', 'new-final.png');
+    const previewUrl = uploaded('polaroid_preview', 'new-preview.png');
     const update = jest.fn().mockResolvedValue({ id: 'item-1' });
     const prisma = {
       orderItem: {
@@ -206,8 +210,8 @@ describe('OrdersService admin workflow', () => {
 
     await service.updateFulfillment('order-1', 'item-1', {
       customization: {
-        finalPngUrl: 'https://storage.example/new-final.png',
-        previewUrl: 'https://storage.example/new-preview.png',
+        finalPngUrl,
+        previewUrl,
         price: 1,
       },
     });
@@ -216,8 +220,8 @@ describe('OrdersService admin workflow', () => {
       where: { id: 'item-1' },
       data: {
         customization: {
-          finalPngUrl: 'https://storage.example/new-final.png',
-          previewUrl: 'https://storage.example/new-preview.png',
+          finalPngUrl,
+          previewUrl,
         },
       },
     });

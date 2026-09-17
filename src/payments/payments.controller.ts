@@ -14,6 +14,7 @@ import {
 import type { RawBodyRequest } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiConflictResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -64,6 +65,10 @@ export class PaymentsController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Verify Paystack payment and fulfill the order' })
   @ApiOkResponse({ description: 'Verified paid order' })
+  @ApiConflictResponse({
+    description:
+      'Payment was received, but inventory fulfillment is blocked and requires an admin retry',
+  })
   @ApiBadRequestResponse({
     description:
       'Failed transaction, amount/currency mismatch, or invalid reference',

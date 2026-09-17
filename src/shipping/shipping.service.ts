@@ -10,6 +10,7 @@ import { PaymentStatus, Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ShipbubbleService } from './shipbubble.service';
 import { ShippingRateDto } from './dto/shipping-rate.dto';
+import { createHash } from 'node:crypto';
 
 @Injectable()
 export class ShippingService {
@@ -46,7 +47,7 @@ export class ShippingService {
     const unitWeight =
       this.config?.get<string>('SHIPBUBBLE_DEFAULT_UNIT_WEIGHT_KG', '0.1') ??
       '0.1';
-    return this.provider.fetchRates({
+    const rates = await this.provider.fetchRates({
       receiverAddressCode: addressCode,
       pickupDate:
         dto.pickupDate ??
@@ -64,6 +65,79 @@ export class ShippingService {
         };
       }),
     });
+    await this.prisma.shippingQuote.upsert({
+      where: { requestToken: rates.requestToken },
+      update: {
+        checkoutHash: this.checkoutHash(dto),
+        courierChoices: rates.couriers,
+        expiresAt: new Date(Date.now() + 30 * 60_000),
+      },
+      create: {
+        requestToken: rates.requestToken,
+        checkoutHash: this.checkoutHash(dto),
+        courierChoices: rates.couriers,
+        expiresAt: new Date(Date.now() + 30 * 60_000),
+      },
+    });
+    return rates;
+  }
+
+  async validateSelection(input: {
+    name: string;
+    email: string;
+    phone: string;
+    address: string;
+    state: string;
+    items: Array<{ variantSku: string; quantity: number }>;
+    requestToken: string;
+    serviceCode: string;
+    courierId: string;
+  }) {
+    const quote = await this.prisma.shippingQuote.findUnique({
+      where: { requestToken: input.requestToken },
+    });
+    if (!quote || quote.expiresAt <= new Date())
+      throw new BadRequestException('The selected delivery quote has expired');
+    if (quote.checkoutHash !== this.checkoutHash(input))
+      throw new BadRequestException(
+        'The selected delivery quote does not match this checkout',
+      );
+    const choices = quote.courierChoices as Array<{
+      serviceCode?: string;
+      courierId?: string;
+    }>;
+    if (
+      !choices.some(
+        (choice) =>
+          choice.serviceCode === input.serviceCode &&
+          choice.courierId === input.courierId,
+      )
+    )
+      throw new BadRequestException('The selected courier option is invalid');
+  }
+
+  private checkoutHash(input: {
+    name: string;
+    email: string;
+    phone: string;
+    address: string;
+    state: string;
+    items: Array<{ variantSku: string; quantity: number }>;
+  }) {
+    const canonical = {
+      name: input.name.trim().toLowerCase(),
+      email: input.email.trim().toLowerCase(),
+      phone: input.phone.replace(/\D/g, ''),
+      address: input.address.trim().toLowerCase(),
+      state: input.state.trim().toLowerCase(),
+      items: [...input.items]
+        .map((item) => ({
+          variantSku: item.variantSku.trim().toUpperCase(),
+          quantity: item.quantity,
+        }))
+        .sort((a, b) => a.variantSku.localeCompare(b.variantSku)),
+    };
+    return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
   }
 
   async attempt(orderId: string) {

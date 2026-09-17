@@ -158,6 +158,14 @@ export class OrdersController {
     return this.ordersService.recordManualPayment(id, dto);
   }
 
+  @Post(':id/fulfillment/retry')
+  @ApiOperation({
+    summary: 'Retry inventory fulfillment for a successfully paid order',
+  })
+  retryBlockedFulfillment(@Param('id') id: string) {
+    return this.ordersService.retryBlockedFulfillment(id);
+  }
+
   @Post(':id/cancel')
   @ApiOperation({
     summary:
@@ -173,6 +181,13 @@ export class OrdersController {
   })
   retryShipment(@Param('id') id: string) {
     return this.ordersService.retryShipment(id);
+  }
+
+  @Get('checkout/:token')
+  @Public()
+  @ApiOperation({ summary: 'Recover a checkout using its unguessable token' })
+  getCheckout(@Param('token') token: string) {
+    return this.ordersService.getCheckoutByToken(token);
   }
 
   @Get(':id')
